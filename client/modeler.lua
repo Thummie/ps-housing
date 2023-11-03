@@ -342,6 +342,7 @@ Modeler = {
             position = offsetPos,
             rotation = newRot,
             type = item.type,
+            movedObject = true
         }
 
         TriggerServerEvent("ps-housing:server:updateFurniture", self.property_id, newFurniture)
@@ -439,7 +440,7 @@ Modeler = {
             totalPrice = totalPrice + v.price
         end
 
-        local PlayerData = QBCore.Functions.GetPlayerData()
+        PlayerData = QBCore.Functions.GetPlayerData()
         if PlayerData.money.cash < totalPrice and PlayerData.money.bank < totalPrice then
 	    Framework[Config.Notify].Notify("You don't have enough money!", "error")
             return
@@ -475,15 +476,30 @@ Modeler = {
     end,
 
     HoverIn = function (self, data)
-        self:HoverOut()
-        local object = data.object
-        if object == nil then return end
+        if self.HoverObject then
+            local tries = 0
+            while DoesEntityExist(self.HoverObject) do
+                SetEntityAsMissionEntity(self.HoverObject, true, true)
+                DeleteEntity(self.HoverObject)
+                Wait(50)
+                tries = tries + 1
+                if tries > 25 then
+                    break
+                end
+            end
 
+            self.HoverObject = nil
+        end
+
+        local isDoor = false
+        local object = data.object and joaat(data.object) or nil
+        if object == nil then return end
         lib.requestModel(object)
-        self.HoverObject = CreateObject(GetHashKey(object), 0.0, 0.0, 0.0, false, true, false)
+        if self.HoverObject then return end
+        if data.type == "door" then isDoor = true end
+        self.HoverObject = CreateObject(object, 0.0, 0.0, 0.0, false, false, isDoor)
         Modeler.CurrentCameraLookAt =  Freecam:GetTarget(self.HoverDistance)
         local camRot = Freecam:GetRotation()
-
         SetEntityCoords(self.HoverObject, self.CurrentCameraLookAt.x, self.CurrentCameraLookAt.y, self.CurrentCameraLookAt.z)
         FreezeEntityPosition(self.HoverObject, true)
         SetEntityCollision(self.HoverObject, false, false)
@@ -499,8 +515,19 @@ Modeler = {
 
     HoverOut = function (self)
         if self.HoverObject == nil then return end
-        DeleteEntity(self.HoverObject)
-        self.HoverObject = nil
+        if self.HoverObject and self.HoverObject ~= 0 then
+            local tries = 0
+            while DoesEntityExist(self.HoverObject) do
+                SetEntityAsMissionEntity(self.HoverObject, true, true)
+                DeleteEntity(self.HoverObject)
+                Wait(50)
+                tries = tries + 1
+                if tries > 25 then
+                    break
+                end
+            end
+            self.HoverObject = nil
+        end
         self.IsHovering = false
     end,
 

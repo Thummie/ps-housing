@@ -32,8 +32,7 @@ function Property:new(propertyData)
     propertyData.furnitures = {}
     self.propertyData = propertyData
 
-    local Player = QBCore.Functions.GetPlayerData()
-    local citizenid = Player.citizenid
+    local citizenid = PlayerData.citizenid
 
     self.owner = propertyData.owner == citizenid
     self.has_access = lib.table.contains(self.propertyData.has_access, citizenid)
@@ -181,7 +180,7 @@ function Property:RegisterGarageZone()
     self.garageZone = lib.zones.box({
         coords = vec3(garageData.x, garageData.y, garageData.z),
         size = vector3(garageData.length + 5.0, garageData.width + 5.0, 3.5),
-        rotation = 45,
+        rotation = garageData.h,
         debug = Config.DebugMode,
         onEnter = function()
             TriggerEvent('qb-garages:client:setHouseGarage', self.property_id, true)
@@ -200,6 +199,7 @@ end
 
 function Property:EnterShell()
     DoScreenFadeOut(250)
+    TriggerServerEvent("InteractSound_SV:PlayOnSource", "houses_door_open", 0.25)
     Wait(250)
 
     self.inProperty = true
@@ -219,6 +219,7 @@ function Property:LeaveShell()
     if not self.inProperty then return end
 
     DoScreenFadeOut(250)
+    TriggerServerEvent("InteractSound_SV:PlayOnSource", "houses_door_open", 0.25)
     Wait(250)
 
     local coords = self:GetDoorCoords()
@@ -467,12 +468,11 @@ function Property:LoadFurnitures()
 end
 
 function Property:UnloadFurniture(furniture, index)
-    local entity = furniture.entity
-
+    local entity = furniture?.entity
     if not entity then 
         for i = 1, #self.furnitureObjs do
-            if self.furnitureObjs[i].id == furniture.id then
-                entity = self.furnitureObjs[i].entity
+            if self.furnitureObjs[i]?.id and furniture?.id and self.furnitureObjs[i].id == furniture.id then
+                entity = self.furnitureObjs[i]?.entity
                 break
             end
         end
@@ -489,11 +489,11 @@ function Property:UnloadFurniture(furniture, index)
     end
 
     if index and self.furnitureObjs?[index] then
-        self.furnitureObjs[index] = nil
+        table.remove(self.furnitureObjs, index)
     else 
         for i = 1, #self.furnitureObjs do
-            if self.furnitureObjs[i].id == furniture.id then
-                self.furnitureObjs[i] = nil
+            if self.furnitureObjs[i]?.id and furniture?.id and self.furnitureObjs[i].id == furniture.id then
+                table.remove(self.furnitureObjs, i)
                 break
             end
         end
@@ -554,6 +554,7 @@ end
 local function findFurnitureDifference(new, old)
     local added = {}
     local removed = {}
+    local edited = {}
 
     for i = 1, #new do
         local found = false
@@ -581,7 +582,13 @@ local function findFurnitureDifference(new, old)
         end
     end
 
-    return added, removed
+    for i = 1, #new do
+        if new[i].movedObject then
+            edited[#edited + 1] = new[i]
+        end
+    end
+
+    return added, removed, edited
 end
 
 -- I think this whole furniture sync is a bit shit, but I cbf thinking 
@@ -589,7 +596,7 @@ function Property:UpdateFurnitures(newFurnitures)
     if not self.inProperty then return end
 
     local oldFurnitures = self.propertyData.furnitures
-    local added, removed = findFurnitureDifference(newFurnitures, oldFurnitures)
+    local added, removed, edited = findFurnitureDifference(newFurnitures, oldFurnitures)
 
     for i = 1, #added do
         local furniture = added[i]
@@ -600,8 +607,27 @@ function Property:UpdateFurnitures(newFurnitures)
         local furniture = removed[i]
         self:UnloadFurniture(furniture)
     end
+    
+    for i = 1, #edited do
+        local furniture = edited[i]
+        self:UnloadFurniture(furniture)
+        self:LoadFurniture(furniture)
+    end
 
-    self.propertyData.furnitures = newFurnitures
+    local furnitures = {}
+
+    for i = 1, #newFurnitures do
+        furnitures[i] = {
+            id = newFurnitures[i].id,
+            label = newFurnitures[i].label,
+            object = newFurnitures[i].object,
+            position = newFurnitures[i].position,
+            rotation = newFurnitures[i].rotation,
+            type = newFurnitures[i].type
+        }
+    end
+
+    self.propertyData.furnitures = furnitures
 
     Modeler:UpdateFurnitures()
 end
@@ -630,8 +656,7 @@ end
 function Property:UpdateOwner(newOwner)
     self.propertyData.owner = newOwner
 
-    local Player = QBCore.Functions.GetPlayerData()
-    local citizenid = Player.citizenid
+    local citizenid = PlayerData.citizenid
 
     self.owner = newOwner == citizenid
 
@@ -660,8 +685,7 @@ function Property:UpdateDoor(newDoor, newStreet, newRegion)
 end
 
 function Property:UpdateHas_access(newHas_access)
-    local Player = QBCore.Functions.GetPlayerData()
-    local citizenid = Player.citizenid
+    local citizenid = PlayerData.citizenid
     self.propertyData.has_access = newHas_access
     self.has_access = lib.table.contains(newHas_access, citizenid)
 
