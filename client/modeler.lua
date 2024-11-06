@@ -17,20 +17,6 @@ local function CamThread()
     end)
 end
 
-local function isInside(coords)
-    local extent = Modeler.shellMinMax
-
-    local isX = coords.x >= extent.min.x and coords.x <= extent.max.x
-    local isY = coords.y >= extent.min.y and coords.y <= extent.max.y
-    local isZ = coords.z >= extent.min.z and coords.z <= extent.max.z
-    if isX and isY and isZ then
-        return true
-    end
-
-    return false
-
-end
-
 local function getMinMax(shellPos, shellMin, shellMax)
     local min = vector3(shellPos.x + shellMin.x, shellPos.y + shellMin.y, shellPos.z + shellMin.z)
     local max = vector3(shellPos.x + shellMax.x, shellPos.y + shellMax.y, shellPos.z + shellMax.z)
@@ -61,7 +47,7 @@ AddEventHandler('freecam:onTick', function()
         end
     end
 
-    if not isInside(camPos) then
+    if not Modeler.contain(camPos) then
         Freecam:SetPosition(Modeler.CurrentCameraPosition.x, Modeler.CurrentCameraPosition.y, Modeler.CurrentCameraPosition.z)
         update = false
     end
@@ -80,8 +66,22 @@ AddEventHandler('freecam:onTick', function()
     })
 end)
 
+local function getPolygonCentroid(coords)
+    local x_sum = 0
+    local y_sum = 0
+    local num_points = #coords
 
+    for i, coord in ipairs(coords) do
+        x_sum = x_sum + coord.x
+        y_sum = y_sum + coord.y
+    end
 
+    return vector3(x_sum / num_points, y_sum / num_points, coords[1].z)
+end
+
+local function floor(val)
+    return math.floor(val * 10000) / 10000
+end
 
 -- WHERE THE ACTUAL CLASS STARTS
 
@@ -93,6 +93,7 @@ Modeler = {
 
     shellPos = nil,
     shellMinMax = nil,
+    contain = nil,
 
     CurrentObject = nil,
     CurrentCameraPosition = nil,
@@ -107,19 +108,35 @@ Modeler = {
     HoverDistance = 5.0,
 
     OpenMenu = function(self, property_id)
-
-
         local property = Property.Get(property_id)
 
         if not property then return end
         if not property.owner and not property.has_access then return end
-        if property.has_access and not Config.AccessCanEditFurniture  then return end 
+        if property.has_access and not Config.AccessCanEditFurniture  then return end
 
-        self.shellPos = GetEntityCoords(property.shellObj)
-        local min, max = GetModelDimensions(property.shellData.hash)
+        local isMlo = property.propertyData.shell == 'mlo'
+        self.shellPos = isMlo and getPolygonCentroid(property.mloData.poly.points) or GetEntityCoords(property.shellObj)
 
-        self.shellMinMax = getMinMax(self.shellPos, min, max)
-        
+        self.contain = function(coords)
+            if isMlo then
+                return property.mloData.poly:contains(coords)
+            end
+
+            local garden = property.propertyData.garden_data and property.propertyData.garden_data.poly
+            if garden and garden:contains(coords) then
+                return true
+            end
+
+            if not property.shellData then return end
+
+            local min, max = GetModelDimensions(property.shellData.hash)
+            local extent = getMinMax(self.shellPos, min, max)
+            local isX = coords.x >= extent.min.x and coords.x <= extent.max.x
+            local isY = coords.y >= extent.min.y and coords.y <= extent.max.y
+            local isZ = coords.z >= extent.min.z and coords.z <= extent.max.z
+            return isX and isY and isZ
+        end
+
         self.property_id = property_id
         self.IsMenuActive = true
 
@@ -218,11 +235,13 @@ Modeler = {
             curObject = data.entity
             objectPos = GetEntityCoords(curObject)
             objectRot = GetEntityRotation(curObject)
-        else 
+        else
+            local hash = GetHashKey(object)
+            if not IsModelInCdimage(hash) then return end
             self:StopPlacement()
-            lib.requestModel(object)
+            lib.requestModel(hash)
 
-            curObject = CreateObject(GetHashKey(object), 0.0, 0.0, 0.0, false, true, false)
+            curObject = CreateObject(hash, 0.0, 0.0, 0.0, false, true, false)
             SetEntityCoords(curObject, self.CurrentCameraLookAt.x, self.CurrentCameraLookAt.y, self.CurrentCameraLookAt.z)
 
             objectRot = GetEntityRotation(curObject)
@@ -258,7 +277,7 @@ Modeler = {
 
     MoveObject = function (self, data)
         local coords = vec3(data.x + 0.0, data.y + 0.0, data.z + 0.0)
-        if not isInside(coords) then
+        if not self.contain(coords) then
             return
         end
 
@@ -328,11 +347,27 @@ Modeler = {
     UpdateFurniture = function (self, item)
         local newPos = GetEntityCoords(item.entity)
         local newRot = GetEntityRotation(item.entity)
+        DeleteEntity(item.entity)
 
-        local offsetPos = {
-                x = math.floor((newPos.x - self.shellPos.x) * 10000) / 10000,
-                y = math.floor((newPos.y - self.shellPos.y) * 10000) / 10000,
-                z = math.floor((newPos.z - self.shellPos.z) * 10000) / 10000,
+        local hash = GetHashKey(item.object)
+        lib.requestModel(hash)
+
+        if not IsModelInCdimage(hash) then return end
+
+        item.entity = CreateObject(GetHashKey(item.object), newPos.x, newPos.y, newPos.z, false, true, false)
+        SetEntityRotation(item.entity, newRot.x, newRot.y, newRot.z)
+        FreezeEntityPosition(item.entity, true)
+
+        local property = Property.Get(self.property_id)
+
+        local offsetPos = property.propertyData.shell == 'mlo' and {
+            x = floor(newPos.x),
+            y = floor(newPos.y),
+            z = floor(newPos.z),
+        } or {
+            x = floor(newPos.x - self.shellPos.x),
+            y = floor(newPos.y - self.shellPos.y),
+            z = floor(newPos.z - self.shellPos.z),
         }
 
         local newFurniture = {
@@ -429,9 +464,9 @@ Modeler = {
         local items = {}
         local totalPrice = 0
 
-	-- If the cart is empty, return notify
+	    -- If the cart is empty, return notify
         if not next(self.Cart) then
-	    Framework[Config.Notify].Notify("Your cart is empty", "error")
+	        Framework[Config.Notify].Notify("Your cart is empty", "error")
             return
         end
 
@@ -442,16 +477,21 @@ Modeler = {
 
         PlayerData = QBCore.Functions.GetPlayerData()
         if PlayerData.money.cash < totalPrice and PlayerData.money.bank < totalPrice then
-	    Framework[Config.Notify].Notify("You don't have enough money!", "error")
+	        Framework[Config.Notify].Notify("You don't have enough money!", "error")
             return
         end
+        local property = Property.Get(self.property_id)
 
         for _, v in pairs(self.Cart) do
-
-            local offsetPos = {
-                x = math.floor((v.position.x - self.shellPos.x) * 10000) / 10000,
-                y = math.floor((v.position.y - self.shellPos.y) * 10000) / 10000,
-                z = math.floor((v.position.z - self.shellPos.z) * 10000) / 10000,
+            local pos = v.position
+            local offsetPos = property.propertyData.shell == 'mlo' and {
+                x = floor(pos.x),
+                y = floor(pos.y),
+                z = floor(pos.z),
+            } or {
+                x = floor(pos.x - self.shellPos.x),
+                y = floor(pos.y - self.shellPos.y),
+                z = floor(pos.z - self.shellPos.z),
             }
             
             local id = tostring(math.random(100000, 999999)..self.property_id)
@@ -466,7 +506,7 @@ Modeler = {
             }
         end
 
-        TriggerServerEvent("ps-housing:server:buyFurniture", self.property_id, items, totalPrice)
+        TriggerServerEvent("ps-housing:server:buyFurniture", self.property_id, items, totalPrice, property.inGarden)
 
         self:ClearCart()
     end,
@@ -492,13 +532,19 @@ Modeler = {
         end
 
         local isDoor = false
-        local object = data.object and joaat(data.object) or nil
+        local object = data.object or nil
         if object == nil then return end
-        lib.requestModel(object)
+
+        local hash = GetHashKey(object)
+        if not IsModelInCdimage(hash) then return end
+        lib.requestModel(hash)
         if self.HoverObject then return end
         if data.type == "door" then isDoor = true end
-        self.HoverObject = CreateObject(object, 0.0, 0.0, 0.0, false, false, isDoor)
+
+        self.HoverObject = CreateObject(hash, 0.0, 0.0, 0.0, false, false, isDoor)
+
         Modeler.CurrentCameraLookAt =  Freecam:GetTarget(self.HoverDistance)
+
         local camRot = Freecam:GetRotation()
         SetEntityCoords(self.HoverObject, self.CurrentCameraLookAt.x, self.CurrentCameraLookAt.y, self.CurrentCameraLookAt.z)
         FreezeEntityPosition(self.HoverObject, true)
@@ -539,6 +585,11 @@ Modeler = {
     end,
 
     RemoveOwnedItem = function (self, data)
+        if data.type == 'storage' then
+            local property = Property.Get(self.property_id).storageTarget[data.entity]
+            local hasItems = Framework[Config.Inventory].inventoryHasItems(property)
+            if hasItems then Framework[Config.Notify].Notify('Stash is not empty', 'error') return end
+        end
         local item = data
 
         if item ~= nil then

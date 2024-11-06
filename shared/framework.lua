@@ -1,10 +1,15 @@
 Framework = {}
 
 PoliceJobs = {}
+RealtorJobs = {}
 
 -- Convert config table to usable keys
 for i = 1, #Config.PoliceJobNames do
     PoliceJobs[Config.PoliceJobNames[i]] = true
+end
+
+for i = 1, #Config.RealtorJobNames do
+    RealtorJobs[Config.RealtorJobNames[i]] = true
 end
 
 if IsDuplicityVersion() then
@@ -54,7 +59,6 @@ local function hasApartment(apts)
 end
 
 Framework.qb = {
-
     Notify = function(message, type)
         type = type == "info" and "primary" or type
         TriggerEvent('QBCore:Notify', message, type)
@@ -93,7 +97,7 @@ Framework.qb = {
                             local job = PlayerData.job
                             local jobName = job.name
                             local onDuty = job.onduty
-                            return jobName == Config.RealtorJobName and onDuty
+                            return RealtorJobs[jobName] and onDuty
                         end,
                     },
                     {
@@ -104,7 +108,7 @@ Framework.qb = {
                             local job = PlayerData.job
                             local jobName = job.name
                             local onDuty = job.onduty
-                            return jobName == Config.RealtorJobName and onDuty
+                            return RealtorJobs[jobName] and onDuty
                         end,
                     },
                     {
@@ -270,10 +274,20 @@ Framework.qb = {
     RemoveTargetEntity = function (entity)
         exports["qb-target"]:RemoveTargetEntity(entity)
     end,
-
-    OpenInventory = function (stash, stashConfig)
-        TriggerServerEvent("inventory:server:OpenInventory", "stash", stash, stashConfig)
-        TriggerEvent("inventory:client:SetCurrentStash", stash)
+    inventoryHasItems = function(name)
+        return lib.callback.await('ps-housing:cb:inventoryHasItems', 10, name)
+    end,
+    OpenInventory = function (stash, stashConfig, propertyId)
+        if lib.checkDependency('qb-inventory', '2.0.0') then
+            TriggerServerEvent('ps-housing:server:openQBInv', {
+                stashId = stash,
+                stashData = stashConfig,
+                propertyId = propertyId
+            })
+        else
+            TriggerServerEvent("inventory:server:OpenInventory", "stash", stash, stashConfig)
+            TriggerEvent("inventory:client:SetCurrentStash", stash)
+        end
     end,
 }
 
@@ -317,7 +331,7 @@ Framework.ox = {
                         local job = PlayerData.job
                         local jobName = job.name
 
-                        return jobName == Config.RealtorJobName
+                        return RealtorJobs[jobName]
                     end,
                 },
                 {
@@ -328,7 +342,7 @@ Framework.ox = {
                         local job = PlayerData.job
                         local jobName = job.name
                         local onDuty = job.onduty
-                        return jobName == Config.RealtorJobName and onDuty
+                        return RealtorJobs[jobName] and onDuty
                     end,
                 },
                 {
@@ -470,7 +484,9 @@ Framework.ox = {
             },
         })
     end,
-
+    inventoryHasItems = function(name)
+        return lib.callback.await('ps-housing:cb:inventoryHasItems', 10, name, true)
+    end,
     RemoveTargetEntity = function (entity)
         exports.ox_target:removeLocalEntity(entity)
     end,
